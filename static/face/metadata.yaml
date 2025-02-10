@@ -1,0 +1,19 @@
+description: Ultralytics YOLO11m model trained on datasets/widerface.yaml
+author: Ultralytics
+date: '2025-02-10T05:56:24.664501'
+version: 8.3.74
+license: AGPL-3.0 License (https://ultralytics.com/license)
+docs: https://docs.ultralytics.com
+stride: 32
+task: detect
+batch: 1
+imgsz:
+- 640
+- 640
+names:
+  0: face
+args:
+  batch: 1
+  half: false
+  int8: false
+  nms: false

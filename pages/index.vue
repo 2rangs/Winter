@@ -1,156 +1,195 @@
 <template>
-  <div class="min-h-screen flex flex-col items-center justify-center bg-gray-200 p-4">
-    <div v-if="isLoadingModel" class="text-lg font-bold">Loading Model ...</div>
-    <div v-else>
-      <label for="avatar" class="block mb-2 text-lg font-medium">Choose a picture:</label>
+  <div class="min-h-screen flex flex-col items-center justify-center bg-gray-200 p-6">
+    <!-- 이미지 업로드 -->
+    <div class="w-full max-w-2xl">
+      <label for="upload" class="block mb-4 text-lg font-medium text-center">
+        Upload an image:
+      </label>
       <input
-          @change="handleImageChange"
           type="file"
-          id="avatar"
-          name="avatar"
+          id="upload"
           accept="image/*"
-          class="mb-4"
+          class="block w-full text-sm text-gray-500
+               file:mr-4 file:py-2 file:px-4
+               file:rounded-lg file:border-0
+               file:text-sm file:font-semibold
+               file:bg-blue-500 file:text-white
+               hover:file:bg-blue-600"
+          @change="handleImageUpload"
       />
     </div>
 
-    <div class="relative">
-      <img id="img_to_detect" class="hidden" />
-      <canvas id="detect_result" class="border rounded shadow-md"></canvas>
+    <!-- 이미지 & 캔버스 -->
+    <div class="relative mt-6 max-w-5xl w-full">
+      <img
+          v-if="imageUrl"
+          :src="imageUrl"
+          ref="imageRef"
+          class="w-full border rounded shadow-md"
+          @load="updateCanvasSize"
+      />
+      <canvas ref="canvasRef" class="absolute top-0 left-0"></canvas>
+    </div>
+
+    <!-- 탐지 결과 -->
+    <div class="mt-6 w-full max-w-2xl text-center">
+      <h2 class="text-lg font-bold">Detection Results:</h2>
+      <p v-if="loading" class="text-gray-600">Processing...</p>
+      <p v-else class="bg-gray-100 p-4 rounded shadow-md text-lg w-full text-center">
+        <span class="">Processing Time: {{ processTime }} ms ({{ (processTime / 1000).toFixed(1) }} s)</span>
+      </p>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue';
-import * as tf from '@tensorflow/tfjs';
-import { loadGraphModel } from '@tensorflow/tfjs-converter';
+import { ref, nextTick } from 'vue'
+import * as tf from '@tensorflow/tfjs'
 
-// 모델 경로
-const MODEL_URL = '/license_plate/model.json'; // 사용자 모델 경로
+// 상태 변수
+const imageUrl = ref<string | null>(null)
+const licensePredictions = ref<any[]>([])
+const facePredictions = ref<any[]>([])
+const processTime = ref<number>(0) // ⏳ 처리 시간 표시
+const loading = ref(false)
+const imageRef = ref<HTMLImageElement | null>(null)
+const canvasRef = ref<HTMLCanvasElement | null>(null)
 
-// 상태 관리
-const isLoadingModel = ref(false);
-let customModel: tf.GraphModel | null = null;
+// 모델 설정
+const LICENSE_MODEL_PATH = '/license_plate/model.json' // ✅ 번호판 검출 모델
+const FACE_MODEL_PATH = '/face/model.json' // ✅ 얼굴 검출 모델
+const CONFIDENCE_THRESHOLD = 0.5 // ✅ 신뢰도 0.03 이상 필터링
 
-// 모델 로드
-const loadModel = async () => {
-  try {
-    isLoadingModel.value = true;
-    customModel = await loadGraphModel(MODEL_URL);
-    console.log('Model loaded successfully!');
-  } catch (error) {
-    console.error('Error loading model:', error);
-    alert('Failed to load the model. Please check the model path.');
-  } finally {
-    isLoadingModel.value = false;
-  }
-};
+// **📌 모델 로드 함수**
+const loadModels = async () => {
+  console.log("🔄 Loading models...")
+  const [licenseModel, faceModel] = await Promise.all([
+    tf.loadGraphModel(LICENSE_MODEL_PATH),
+    tf.loadGraphModel(FACE_MODEL_PATH)
+  ])
+  console.log("✅ Models loaded successfully!")
+  return { licenseModel, faceModel }
+}
 
-// 이미지 파일 선택
-const handleImageChange = (event: Event) => {
-  const file = (event.target as HTMLInputElement)?.files?.[0];
-  if (!file) {
-    console.warn('No file selected');
-    return;
-  }
+// **📌 이미지 업로드 처리 함수**
+const handleImageUpload = async (event: Event) => {
+  const file = (event.target as HTMLInputElement).files?.[0]
+  if (!file) return
 
-  const img = document.getElementById('img_to_detect') as HTMLImageElement;
-  const url = URL.createObjectURL(file);
+  imageUrl.value = URL.createObjectURL(file)
+  loading.value = true
 
-  img.src = url;
-  img.onload = async () => {
-    await runObjectDetection(img);
-  };
-};
+  await nextTick() // 이미지 렌더링 완료 후 실행
 
-// 객체 탐지 실행
-const runObjectDetection = async (img: HTMLImageElement) => {
-  if (!customModel) {
-    console.error('Model not loaded');
-    return;
-  }
+  const startTime = performance.now() // ⏳ 처리 시간 측정 시작
+  const { licenseModel, faceModel } = await loadModels()
 
-  const canvas = document.getElementById('detect_result') as HTMLCanvasElement;
-  const context = canvas.getContext('2d');
+  const [licenseResults, faceResults] = await Promise.all([
+    predict(licenseModel, imageRef.value!),
+    predict(faceModel, imageRef.value!)
+  ])
 
-  canvas.width = img.width;
-  canvas.height = img.height;
+  // **✅ 신뢰도 필터링 적용**
+  licensePredictions.value = filterPredictions(licenseResults)
+  facePredictions.value = filterPredictions(faceResults)
 
-  // 이미지 -> 텐서 변환
+  console.log('🔍 License Predictions:', licensePredictions.value)
+  console.log('🔍 Face Predictions:', facePredictions.value)
+
+  await nextTick() // 캔버스 업데이트
+  blurBoundingBoxes(imageRef.value!, canvasRef.value!, licensePredictions.value, facePredictions.value)
+  loading.value = false
+
+  processTime.value = Math.round(performance.now() - startTime) // ⏳ 처리 시간 저장
+}
+
+// **📌 모델 추론 수행 함수**
+const predict = async (model: tf.GraphModel, imageElement: HTMLImageElement) => {
   const tensor = tf.browser
-      .fromPixels(img)
-      .resizeNearestNeighbor([640, 640]) // 모델 입력 크기에 맞게 조정
+      .fromPixels(imageElement)
+      .resizeNearestNeighbor([640, 640])
       .toFloat()
-      .div(255.0)
-      .expandDims(0);
+      .expandDims(0)
+      .div(tf.scalar(255.0))
 
-  // 모델 추론
-  const predictions = await customModel.executeAsync(tensor);
+  const predictions = await model.executeAsync(tensor) as tf.Tensor
+  const reshapedPredictions = predictions.reshape([5, 8400])
+  const boxesTensor = reshapedPredictions.slice([0, 0], [4, 8400])
+  const scoresTensor = reshapedPredictions.slice([4, 0], [1, 8400]).squeeze()
+  const classesTensor = tf.fill([8400], 0) // 클래스 인덱스
 
-  // 바운딩 박스 좌표 및 신뢰도 텐서
-  const boxesTensor = predictions[0]; // 바운딩 박스 좌표
-  const scoresTensor = predictions[1]; // 신뢰도
+  const boxes = boxesTensor.arraySync()
+  const scores = scoresTensor.arraySync()
+  const classes = classesTensor.arraySync()
 
-  const boxes = await boxesTensor.data(); // 1D 배열로 가져오기
-  const scores = await scoresTensor.data();
+  // ✅ 메모리 해제
+  tensor.dispose()
+  predictions.dispose()
+  boxesTensor.dispose()
+  scoresTensor.dispose()
+  classesTensor.dispose()
 
-  const threshold = 0.9; // 신뢰도 임계값
-  const filteredBoxes = [];
-  const filteredScores = [];
+  return { boxes, scores, classes }
+}
 
-  // 필터링
-  for (let i = 0; i < scores.length; i++) {
-    if (scores[i] > threshold) {
-      const boxIndex = i * 4; // 4개씩 묶임 (xMin, yMin, xMax, yMax)
-      filteredBoxes.push([
-        boxes[boxIndex],
-        boxes[boxIndex + 1],
-        boxes[boxIndex + 2],
-        boxes[boxIndex + 3],
-      ]);
-      filteredScores.push(scores[i]);
-    }
-  }
+// **📌 신뢰도 필터링 함수**
+const filterPredictions = (results: any) => {
+  const { boxes, scores, classes } = results
+  return scores
+      .map((score, index) => score > CONFIDENCE_THRESHOLD ? index : -1)
+      .filter(i => i !== -1)
+      .map(i => ({
+        bbox: boxes.map(box => box[i]), // 4개의 좌표 값 가져오기
+        score: scores[i],
+        class: classes[i]
+      }))
+}
 
-  console.log('Filtered Boxes:', filteredBoxes);
-  console.log('Filtered Scores:', filteredScores);
+// **📌 바운딩 박스 내부만 블러 처리**
+const blurBoundingBoxes = (imageElement: HTMLImageElement, canvas: HTMLCanvasElement, plates: any[], faces: any[]) => {
+  const ctx = canvas.getContext("2d")
+  if (!ctx) return
 
-  // 캔버스에 바운딩 박스 그리기
-  context.clearRect(0, 0, canvas.width, canvas.height);
-  context.drawImage(img, 0, 0, canvas.width, canvas.height);
+  canvas.width = imageElement.clientWidth
+  canvas.height = imageElement.clientHeight
 
-  context.font = '16px Arial';
-  context.strokeStyle = 'red';
-  context.fillStyle = 'red';
+  ctx.clearRect(0, 0, canvas.width, canvas.height)
+  ctx.drawImage(imageElement, 0, 0, canvas.width, canvas.height)
 
-  filteredBoxes.forEach(([xMin, yMin, xMax, yMax], index) => {
-    const x = xMin * canvas.width;
-    const y = yMin * canvas.height;
-    const width = (xMax - xMin) * canvas.width;
-    const height = (yMax - yMin) * canvas.height;
+  const blurBoxes = [...plates, ...faces] // ✅ 번호판 + 얼굴 바운딩 박스 합침
 
-    // Draw bounding box
-    context.beginPath();
-    context.rect(x, y, width, height);
-    context.lineWidth = 2;
-    context.stroke();
+  blurBoxes.forEach(({ bbox }) => {
+    const [x_center, y_center, width, height] = bbox
+    const x = (x_center - width / 2) * canvas.width / 640
+    const y = (y_center - height / 2) * canvas.height / 640
+    const w = (width * canvas.width) / 640
+    const h = (height * canvas.height) / 640
 
-    // Draw label and score
-    context.fillText(`Score: ${(filteredScores[index] * 100).toFixed(1)}%`, x, y - 5);
-  });
+    const tempCanvas = document.createElement("canvas")
+    tempCanvas.width = w
+    tempCanvas.height = h
+    const tempCtx = tempCanvas.getContext("2d")
+    if (!tempCtx) return
 
-  tensor.dispose();
-  boxesTensor.dispose();
-  scoresTensor.dispose();
-};
+    tempCtx.drawImage(canvas, x, y, w, h, 0, 0, w, h)
+    tempCtx.filter = "blur(12px)"
+    tempCtx.drawImage(tempCanvas, 0, 0, w, h)
 
-onMounted(loadModel);
+    ctx.drawImage(tempCanvas, 0, 0, w, h, x, y, w, h)
+  })
+}
 </script>
 
 <style scoped>
+img {
+  display: block;
+  margin: auto;
+}
 canvas {
-  width: 100%;
-  max-width: 500px;
-  height: auto;
+  display: block;
+  margin: auto;
+  position: absolute;
+  top: 0;
+  left: 0;
 }
 </style>
