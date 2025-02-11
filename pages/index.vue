@@ -39,6 +39,24 @@
         <span class="">Processing Time: {{ processTime }} ms ({{ (processTime / 1000).toFixed(1) }} s)</span>
       </p>
     </div>
+
+    <!-- 버튼 컨트롤 -->
+    <div class="mt-6 flex space-x-4">
+      <button
+          @click="toggleBlur"
+          :class="{'bg-blue-500': isBlurActive, 'bg-gray-500': !isBlurActive}"
+          class="px-4 py-2 text-white rounded-lg"
+      >
+        {{ isBlurActive ? 'Disable Blur' : 'Enable Blur' }}
+      </button>
+      <button
+          @click="toggleBoundingBox"
+          :class="{'bg-blue-500': isBoundingBoxActive, 'bg-gray-500': !isBoundingBoxActive}"
+          class="px-4 py-2 text-white rounded-lg"
+      >
+        {{ isBoundingBoxActive ? 'Hide Bounding Box' : 'Show Bounding Box' }}
+      </button>
+    </div>
   </div>
 </template>
 
@@ -54,11 +72,13 @@ const processTime = ref<number>(0) // ⏳ 처리 시간 표시
 const loading = ref(false)
 const imageRef = ref<HTMLImageElement | null>(null)
 const canvasRef = ref<HTMLCanvasElement | null>(null)
+const isBlurActive = ref(false)
+const isBoundingBoxActive = ref(false)
 
 // 모델 설정
 const LICENSE_MODEL_PATH = '/license_plate/model.json' // ✅ 번호판 검출 모델
 const FACE_MODEL_PATH = '/face/model.json' // ✅ 얼굴 검출 모델
-const CONFIDENCE_THRESHOLD = 0.5 // ✅ 신뢰도 0.03 이상 필터링
+const CONFIDENCE_THRESHOLD = 0.1 // ✅ 신뢰도 0.3 이상 필터링
 
 // **📌 모델 로드 함수**
 const loadModels = async () => {
@@ -97,7 +117,7 @@ const handleImageUpload = async (event: Event) => {
   console.log('🔍 Face Predictions:', facePredictions.value)
 
   await nextTick() // 캔버스 업데이트
-  blurBoundingBoxes(imageRef.value!, canvasRef.value!, licensePredictions.value, facePredictions.value)
+  drawCanvas(imageRef.value!, canvasRef.value!, licensePredictions.value, facePredictions.value)
   loading.value = false
 
   processTime.value = Math.round(performance.now() - startTime) // ⏳ 처리 시간 저장
@@ -145,8 +165,8 @@ const filterPredictions = (results: any) => {
       }))
 }
 
-// **📌 바운딩 박스 내부만 블러 처리**
-const blurBoundingBoxes = (imageElement: HTMLImageElement, canvas: HTMLCanvasElement, plates: any[], faces: any[]) => {
+// **📌 캔버스에 바운딩 박스 및 블러 처리**
+const drawCanvas = (imageElement: HTMLImageElement, canvas: HTMLCanvasElement, plates: any[], faces: any[]) => {
   const ctx = canvas.getContext("2d")
   if (!ctx) return
 
@@ -156,27 +176,50 @@ const blurBoundingBoxes = (imageElement: HTMLImageElement, canvas: HTMLCanvasEle
   ctx.clearRect(0, 0, canvas.width, canvas.height)
   ctx.drawImage(imageElement, 0, 0, canvas.width, canvas.height)
 
-  const blurBoxes = [...plates, ...faces] // ✅ 번호판 + 얼굴 바운딩 박스 합침
+  const boxes = [...plates, ...faces] // ✅ 번호판 + 얼굴 바운딩 박스 합침
 
-  blurBoxes.forEach(({ bbox }) => {
+  boxes.forEach(({ bbox }) => {
     const [x_center, y_center, width, height] = bbox
     const x = (x_center - width / 2) * canvas.width / 640
     const y = (y_center - height / 2) * canvas.height / 640
     const w = (width * canvas.width) / 640
     const h = (height * canvas.height) / 640
 
-    const tempCanvas = document.createElement("canvas")
-    tempCanvas.width = w
-    tempCanvas.height = h
-    const tempCtx = tempCanvas.getContext("2d")
-    if (!tempCtx) return
+    if (isBlurActive.value) {
+      const tempCanvas = document.createElement("canvas")
+      tempCanvas.width = w
+      tempCanvas.height = h
+      const tempCtx = tempCanvas.getContext("2d")
+      if (!tempCtx) return
 
-    tempCtx.drawImage(canvas, x, y, w, h, 0, 0, w, h)
-    tempCtx.filter = "blur(12px)"
-    tempCtx.drawImage(tempCanvas, 0, 0, w, h)
+      tempCtx.drawImage(canvas, x, y, w, h, 0, 0, w, h)
+      tempCtx.filter = "blur(10px)"
+      tempCtx.drawImage(tempCanvas, 0, 0, w, h)
+      ctx.drawImage(tempCanvas, 0, 0, w, h, x, y, w, h)
+    }
 
-    ctx.drawImage(tempCanvas, 0, 0, w, h, x, y, w, h)
+    if (isBoundingBoxActive.value) {
+      ctx.strokeStyle = 'red'
+      ctx.lineWidth = 2
+      ctx.strokeRect(x, y, w, h)
+    }
   })
+}
+
+// **📌 블러 토글 함수**
+const toggleBlur = () => {
+  isBlurActive.value = !isBlurActive.value
+  if (imageRef.value && canvasRef.value) {
+    drawCanvas(imageRef.value, canvasRef.value, licensePredictions.value, facePredictions.value)
+  }
+}
+
+// **📌 바운딩 박스 토글 함수**
+const toggleBoundingBox = () => {
+  isBoundingBoxActive.value = !isBoundingBoxActive.value
+  if (imageRef.value && canvasRef.value) {
+    drawCanvas(imageRef.value, canvasRef.value, licensePredictions.value, facePredictions.value)
+  }
 }
 </script>
 
