@@ -78,7 +78,7 @@ const isBoundingBoxActive = ref(false)
 // 모델 설정
 const LICENSE_MODEL_PATH = '/license_plate/model.json' // ✅ 번호판 검출 모델
 const FACE_MODEL_PATH = '/face/model.json' // ✅ 얼굴 검출 모델
-const CONFIDENCE_THRESHOLD = 0.1 // ✅ 신뢰도 0.3 이상 필터링
+const CONFIDENCE_THRESHOLD = 0.2 // ✅ 신뢰도 0.3 이상 필터링
 
 // **📌 모델 로드 함수**
 const loadModels = async () => {
